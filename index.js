@@ -32,15 +32,10 @@ async function reconnectAllSessions() {
     }
 }
 
-reconnectAllSessions().then(() => {
-    app.listen(PORT, () => {
-        console.log(`Servidor rodando em http://localhost:${PORT}`);
-    });
-});
-
 async function createSession(userId) {
-    if (connecting[userId]) return;
-    if (sessions[userId]) return; // NÃO criar sessão se já estiver conectada
+    if (sessions[userId]) return; // Já conectada
+    if (connecting[userId]) return; // Já em processo de conexão
+
     connecting[userId] = true;
 
     const sessionsRoot = path.join(__dirname, 'sessoes');
@@ -59,8 +54,6 @@ async function createSession(userId) {
         syncFullHistory: false
     });
 
-    sessions[userId] = sock; // Salva logo ao criar pra evitar múltiplas instâncias
-
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
@@ -70,29 +63,33 @@ async function createSession(userId) {
             qrCodes[userId] = qrBase64;
         }
 
-        if (connection === 'close') {
-    const statusCode = lastDisconnect?.error?.output?.statusCode;
-    const reason = DisconnectReason[statusCode] || 'Unknown';
-
-    console.log(`Conexão fechada para ${userId}, motivo: ${reason} (${statusCode})`);
-
-    delete qrCodes[userId];
-    delete connecting[userId];
-
-    if (statusCode === DisconnectReason.loggedOut) {
-        // Apaga credenciais para forçar QR code novo
-        const authPath = path.join(__dirname, 'sessoes', userId);
-        if (fs.existsSync(authPath)) {
-            fs.rmSync(authPath, { recursive: true, force: true });
-            console.log(`Credenciais apagadas para ${userId} após logout.`);
+        if (connection === 'open') {
+            sessions[userId] = sock;
+            delete qrCodes[userId];
+            delete connecting[userId];
+            console.log(`Sessão conectada para ${userId}`);
         }
-        delete sessions[userId];
-    } else {
-        // Para outros erros, tenta reconectar
-        delete sessions[userId];
-        setTimeout(() => createSession(userId), 5000);
-    }
-}
+
+        if (connection === 'close') {
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            const reason = DisconnectReason[statusCode] || 'Unknown';
+
+            console.log(`Conexão fechada para ${userId}, motivo: ${reason} (${statusCode})`);
+
+            delete sessions[userId];
+            delete qrCodes[userId];
+            delete connecting[userId];
+
+            if (statusCode === DisconnectReason.loggedOut) {
+                const authPath = path.join(__dirname, 'sessoes', userId);
+                if (fs.existsSync(authPath)) {
+                    fs.rmSync(authPath, { recursive: true, force: true });
+                    console.log(`Credenciais apagadas para ${userId} após logout.`);
+                }
+            } else {
+                setTimeout(() => createSession(userId), 5000);
+            }
+        }
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -105,28 +102,29 @@ app.get('/:idusuario', async (req, res) => {
         return res.json({ con: true });
     }
 
-    if (qrCodes[idusuario]) {
-        return res.json({ qrcode: qrCodes[idusuario] });
+    // Cria sessão se ainda não estiver conectando nem conectada
+    if (!sessions[idusuario] && !connecting[idusuario]) {
+        try {
+            await createSession(idusuario);
+        } catch (error) {
+            console.error('Erro ao criar sessão:', error);
+            return res.status(500).json({ error: 'Erro ao criar sessão' });
+        }
     }
 
-    try {
-        await createSession(idusuario);
+    // Aguarda até que o QR seja gerado ou conexão estabelecida
+    let tentativas = 0;
+    while (!sessions[idusuario] && !qrCodes[idusuario] && tentativas < 20) {
+        await new Promise(r => setTimeout(r, 500));
+        tentativas++;
+    }
 
-        let tentativas = 0;
-        while (!qrCodes[idusuario] && tentativas < 10) {
-            await new Promise(res => setTimeout(res, 500));
-            tentativas++;
-        }
-
-        if (!qrCodes[idusuario]) {
-            return res.status(500).json({ error: 'QR Code não gerado a tempo' });
-        }
-
-        res.json({ qrcode: qrCodes[idusuario] });
-    } catch (error) {
-        console.error('Erro ao criar sessão:', error);
-        delete connecting[idusuario];
-        res.status(500).json({ error: 'Erro ao criar sessão' });
+    if (sessions[idusuario]) {
+        return res.json({ con: true });
+    } else if (qrCodes[idusuario]) {
+        return res.json({ qrcode: qrCodes[idusuario] });
+    } else {
+        return res.status(408).json({ error: 'QR Code não gerado a tempo' });
     }
 });
 
@@ -155,25 +153,23 @@ app.get('/:idusuario/:numerowhatsapp/mensagem', async (req, res) => {
                         caption: texto || undefined
                     };
                     break;
-                case 'documento': {
-    try {
-        const urlObj = new URL(caminhoMidia);
-        const originalFileName = decodeURIComponent(path.basename(urlObj.pathname));
+                case 'documento':
+                    try {
+                        const urlObj = new URL(caminhoMidia);
+                        const originalFileName = decodeURIComponent(path.basename(urlObj.pathname));
 
-        mensagem = {
-            document: {
-                url: caminhoMidia,
-                mimetype: 'application/octet-stream',
-                fileName: originalFileName || 'document.pdf' // fallback se vazio
-            },
-            caption: texto || undefined
-        };
-    } catch (e) {
-        // Caso URL inválida, enviar só texto ou erro
-        mensagem = { text: texto || 'Arquivo inválido' };
-    }
-    break;
-}
+                        mensagem = {
+                            document: {
+                                url: caminhoMidia,
+                                mimetype: 'application/octet-stream',
+                                fileName: originalFileName || 'document.pdf'
+                            },
+                            caption: texto || undefined
+                        };
+                    } catch (e) {
+                        mensagem = { text: texto || 'Arquivo inválido' };
+                    }
+                    break;
                 default:
                     mensagem = { text: texto || '' };
             }
@@ -189,9 +185,6 @@ app.get('/:idusuario/:numerowhatsapp/mensagem', async (req, res) => {
     }
 });
 
-
-
-
 app.get('/:idusuario/close', async (req, res) => {
     const { idusuario } = req.params;
 
@@ -204,7 +197,7 @@ app.get('/:idusuario/close', async (req, res) => {
         if (fs.existsSync(authPath)) {
             fs.rmSync(authPath, { recursive: true, force: true });
         }
-        
+
         res.json({ success: true });
     } else {
         res.status(404).json({ error: 'Sessão não encontrada' });
@@ -212,6 +205,8 @@ app.get('/:idusuario/close', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 48501;
-app.listen(PORT, () => {
-    console.log(`Servidor rodando em http://localhost:${PORT}`);
+reconnectAllSessions().then(() => {
+    app.listen(PORT, () => {
+        console.log(`Servidor rodando em http://localhost:${PORT}`);
+    });
 });
