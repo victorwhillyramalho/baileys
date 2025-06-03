@@ -220,3 +220,4 @@ reconnectAllSessions().then(() => {
         console.log(`Servidor rodando em http://localhost:${PORT}`);
     });
 });
+// teste
