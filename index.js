@@ -189,21 +189,30 @@ app.get('/:idusuario/close', async (req, res) => {
     const { idusuario } = req.params;
 
     if (sessions[idusuario]) {
-    delete sessions[idusuario];
-    delete qrCodes[idusuario];
-    delete connecting[idusuario];
+        try {
+            // Finaliza a sessão de forma segura
+            await sessions[idusuario].logout();
+        } catch (e) {
+            console.warn(`Erro ao desconectar sessão ${idusuario}:`, e.message);
+        }
 
-    const authPath = path.join(__dirname, 'sessoes', idusuario);
-    if (fs.existsSync(authPath)) {
-        fs.rmSync(authPath, { recursive: true, force: true });
-    }
+        // Remove referências em memória
+        delete sessions[idusuario];
+        delete qrCodes[idusuario];
+        delete connecting[idusuario];
 
-    res.json({ success: true });
+        // Apaga credenciais salvas
+        const authPath = path.join(__dirname, 'sessoes', idusuario);
+        if (fs.existsSync(authPath)) {
+            fs.rmSync(authPath, { recursive: true, force: true });
+        }
 
+        res.json({ success: true });
     } else {
         res.status(404).json({ error: 'Sessão não encontrada' });
     }
 });
+
 
 const PORT = process.env.PORT || 48501;
 reconnectAllSessions().then(() => {
