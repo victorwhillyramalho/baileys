@@ -133,7 +133,22 @@ app.get('/:idusuario/:numerowhatsapp/mensagem', async (req, res) => {
     const { texto, tipoMidia, caminhoMidia } = req.query;
 
     if (!sessions[idusuario]) {
-        return res.status(404).json({ error: 'Sessão não encontrada' });
+        try {
+            await createSession(idusuario);
+
+            // Aguarda conexão até 10 tentativas
+            let tentativas = 0;
+            while (!sessions[idusuario] && tentativas < 10) {
+                await new Promise(r => setTimeout(r, 500));
+                tentativas++;
+            }
+        } catch (e) {
+            console.error(`Erro ao tentar reconectar sessão para ${idusuario}:`, e.message);
+        }
+
+        if (!sessions[idusuario]) {
+            return res.status(404).json({ error: 'Sessão não conectada' });
+        }
     }
 
     try {
@@ -180,8 +195,13 @@ app.get('/:idusuario/:numerowhatsapp/mensagem', async (req, res) => {
         await sessions[idusuario].sendMessage(`${numerowhatsapp}@s.whatsapp.net`, mensagem);
         res.json({ success: true });
     } catch (error) {
-        console.error('Erro ao enviar mensagem:', error);
-        res.status(500).json({ error: 'Erro ao enviar mensagem' });
+        console.error('Erro ao enviar mensagem:', error.message);
+
+        // Remove sessão e tenta forçar reconexão no futuro
+        delete sessions[idusuario];
+        delete connecting[idusuario];
+
+        res.status(500).json({ error: 'Erro ao enviar mensagem. Sessão pode ter sido perdida.' });
     }
 });
 
