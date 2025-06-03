@@ -189,16 +189,17 @@ app.get('/:idusuario/close', async (req, res) => {
     const { idusuario } = req.params;
 
     if (sessions[idusuario]) {
-        delete sessions[idusuario];
-        delete qrCodes[idusuario];
-        delete connecting[idusuario];
+    delete sessions[idusuario];
+    delete qrCodes[idusuario];
+    delete connecting[idusuario];
 
-        const authPath = path.join(__dirname, 'sessoes', idusuario);
-        if (fs.existsSync(authPath)) {
-            fs.rmSync(authPath, { recursive: true, force: true });
-        }
+    const authPath = path.join(__dirname, 'sessoes', idusuario);
+    if (fs.existsSync(authPath)) {
+        fs.rmSync(authPath, { recursive: true, force: true });
+    }
 
-        res.json({ success: true });
+    res.json({ success: true });
+
     } else {
         res.status(404).json({ error: 'Sessão não encontrada' });
     }
