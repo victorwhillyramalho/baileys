@@ -155,42 +155,47 @@ app.get('/:idusuario/:numerowhatsapp/mensagem', async (req, res) => {
         let mensagem;
 
         if (tipoMidia && caminhoMidia) {
-            switch (tipoMidia.toLowerCase()) {
-                case 'imagem':
-                    mensagem = {
-                        image: { url: caminhoMidia },
-                        caption: texto || undefined
-                    };
-                    break;
-                case 'video':
-                    mensagem = {
-                        video: { url: caminhoMidia },
-                        caption: texto || undefined
-                    };
-                    break;
-                case 'documento':
-                    try {
-                        const urlObj = new URL(caminhoMidia);
-                        const originalFileName = decodeURIComponent(path.basename(urlObj.pathname));
+    if (!caminhoMidia.startsWith('http')) {
+        return res.status(400).json({ error: 'Somente URLs públicas HTTPS são suportadas para envio de mídia no servidor Render.' });
+    }
 
-                        mensagem = {
-                            document: {
-                                url: caminhoMidia,
-                                mimetype: 'application/octet-stream',
-                                fileName: originalFileName || 'document.pdf'
-                            },
-                            caption: texto || undefined
-                        };
-                    } catch (e) {
-                        mensagem = { text: texto || 'Arquivo inválido' };
-                    }
-                    break;
-                default:
-                    mensagem = { text: texto || '' };
+    switch (tipoMidia.toLowerCase()) {
+        case 'imagem':
+            mensagem = {
+                image: { url: caminhoMidia },
+                caption: texto || undefined
+            };
+            break;
+        case 'video':
+            mensagem = {
+                video: { url: caminhoMidia },
+                caption: texto || undefined
+            };
+            break;
+        case 'documento':
+            try {
+                const urlObj = new URL(caminhoMidia);
+                const originalFileName = decodeURIComponent(path.basename(urlObj.pathname));
+
+                mensagem = {
+                    document: {
+                        url: caminhoMidia,
+                        mimetype: 'application/octet-stream',
+                        fileName: originalFileName || 'document.pdf'
+                    },
+                    caption: texto || undefined
+                };
+            } catch (e) {
+                mensagem = { text: texto || 'Arquivo inválido' };
             }
-        } else {
+            break;
+        default:
             mensagem = { text: texto || '' };
-        }
+    }
+} else {
+    mensagem = { text: texto || '' };
+}
+
 
         await sessions[idusuario].sendMessage(`${numerowhatsapp}@s.whatsapp.net`, mensagem);
         res.json({ success: true });
